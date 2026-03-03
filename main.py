@@ -1,18 +1,79 @@
 import gi
 import time
+import sqlite3
+from datetime import datetime
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, GLib, Adw
+from gi.repository import Gtk, GLib, Adw, Gio
+
+
+class DatabaseManager:
+    def __init__(self, db_path="timesheet.db"):
+        self.conn = sqlite3.connect(db_path)
+        self.create_tables()
+
+    def create_tables(self):
+        cursor = self.conn.cursor()
+        # Create projects table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL
+            )
+        """)
+        # Create entries table with project link
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER,
+                task_name TEXT,
+                start_time TEXT,
+                duration_seconds REAL,
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            )
+        """)
+        self.conn.commit()
+
+    def add_project(self, name):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("INSERT INTO projects (name) VALUES (?)", (name,))
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def get_projects(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT name FROM projects")
+        return [row[0] for row in cursor.fetchall()]
+
+    def save_entry(self, project_name, duration):
+        cursor = self.conn.cursor()
+        # Get project ID
+        cursor.execute("SELECT id FROM projects WHERE name = ?", (project_name,))
+        project_row = cursor.fetchone()
+        project_id = project_row[0] if project_row else None
+
+        start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            """
+            INSERT INTO entries (project_id, task_name, start_time, duration_seconds)
+            VALUES (?, ?, ?, ?)
+        """,
+            (project_id, "Work Session", start_time, duration),
+        )
+        self.conn.commit()
 
 
 class DualChessChrono(Gtk.ApplicationWindow):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.db = DatabaseManager()
         self.set_title("VelOps Productivity")
-        self.set_default_size(600, 400)
+        self.set_default_size(600, 500)
 
-        # 0 = Stopped, 1 = Work Active, 2 = Break Active
         self.state = 0
         self.work_elapsed = 0
         self.break_elapsed = 0
@@ -20,8 +81,8 @@ class DualChessChrono(Gtk.ApplicationWindow):
 
         self.build_ui()
         self.apply_css()
+        self.refresh_project_list()
 
-        # Start the global heartbeat (10fps is enough for UI)
         GLib.timeout_add(100, self.update_clocks)
 
     def build_ui(self):
@@ -30,18 +91,37 @@ class DualChessChrono(Gtk.ApplicationWindow):
         main_layout.add_css_class("chrono-frame")
         self.set_child(main_layout)
 
-        # The Dual Clock Display
+        # --- Project Management Section ---
+        proj_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+
+        # Project DropDown
+        self.project_model = Gio.ListStore(item_type=Gtk.StringObject)
+        self.project_dropdown = Gtk.DropDown(
+            model=self.project_model,
+            expression=Gtk.PropertyExpression.new(Gtk.StringObject, None, "string"),
+        )
+
+        # New Project Entry
+        self.new_proj_entry = Gtk.Entry(placeholder_text="New Project Name...")
+        add_proj_btn = Gtk.Button(label="Add Project")
+        add_proj_btn.connect("clicked", self.on_add_project)
+
+        proj_box.append(Gtk.Label(label="Project:"))
+        proj_box.append(self.project_dropdown)
+        proj_box.append(self.new_proj_entry)
+        proj_box.append(add_proj_btn)
+        main_layout.append(proj_box)
+
+        # --- Clock Display ---
         clock_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
         clock_hbox.set_homogeneous(True)
 
-        # Work Side (Left)
         work_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.work_label = Gtk.Label(label="00:00:00")
         self.work_label.add_css_class("dial")
         work_vbox.append(Gtk.Label(label="PROJECT WORK"))
         work_vbox.append(self.work_label)
 
-        # Break Side (Right)
         break_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.break_label = Gtk.Label(label="00:00:00")
         self.break_label.add_css_class("dial")
@@ -52,47 +132,52 @@ class DualChessChrono(Gtk.ApplicationWindow):
         clock_hbox.append(break_vbox)
         main_layout.append(clock_hbox)
 
-        # The Toggle Button (The Plunger)
         self.toggle_btn = Gtk.Button(label="START SESSION")
         self.toggle_btn.add_css_class("plunger-button")
         self.toggle_btn.connect("clicked", self.on_toggle)
         main_layout.append(self.toggle_btn)
 
-        # Stop and Reset Button
-        self.stop_btn = Gtk.Button(label="STOP & RESET SESSION")
+        self.stop_btn = Gtk.Button(label="STOP & SAVE SESSION")
         self.stop_btn.add_css_class("stop-button")
         self.stop_btn.connect("clicked", self.on_stop)
         main_layout.append(self.stop_btn)
 
+    def on_add_project(self, btn):
+        name = self.new_proj_entry.get_text().strip()
+        if name and self.db.add_project(name):
+            self.refresh_project_list()
+            self.new_proj_entry.set_text("")
+
+    def refresh_project_list(self):
+        self.project_model.remove_all()
+        projects = self.db.get_projects()
+        for p in projects:
+            self.project_model.append(Gtk.StringObject.new(p))
+
     def on_toggle(self, btn):
         now = time.time()
         if self.state == 0 or self.state == 2:
-            self.state = 1  # Switch to Work
+            self.state = 1
             self.work_label.add_css_class("active-dial")
             self.break_label.remove_css_class("active-dial")
             btn.set_label("SWITCH TO BREAK")
         else:
-            self.state = 2  # Switch to Break
+            self.state = 2
             self.break_label.add_css_class("active-dial")
             self.work_label.remove_css_class("active-dial")
             btn.set_label("SWITCH TO WORK")
-
         self.last_tick = now
 
     def on_stop(self, btn):
-        # Stop everything
+        selected_item = self.project_dropdown.get_selected_item()
+        if selected_item and self.work_elapsed > 1:
+            project_name = selected_item.get_string()
+            self.db.save_entry(project_name, self.work_elapsed)
+            print(f"Saved {self.format_time(self.work_elapsed)} to {project_name}")
+
         self.state = 0
-
-        # Summary for the user
-        print(
-            f"Session Ended.\nWork: {self.format_time(self.work_elapsed)}\nBreak: {self.format_time(self.break_elapsed)}"
-        )
-
-        # Reset counters
         self.work_elapsed = 0
         self.break_elapsed = 0
-
-        # Reset UI
         self.work_label.set_label("00:00:00")
         self.break_label.set_label("00:00:00")
         self.work_label.remove_css_class("active-dial")
@@ -102,17 +187,13 @@ class DualChessChrono(Gtk.ApplicationWindow):
     def update_clocks(self):
         if self.state == 0:
             return True
-
         now = time.time()
         delta = now - self.last_tick
         self.last_tick = now
-
         if self.state == 1:
             self.work_elapsed += delta
         elif self.state == 2:
             self.break_elapsed += delta
-
-        # Update labels
         self.work_label.set_label(self.format_time(self.work_elapsed))
         self.break_label.set_label(self.format_time(self.break_elapsed))
         return True
@@ -122,39 +203,17 @@ class DualChessChrono(Gtk.ApplicationWindow):
 
     def apply_css(self):
         css_provider = Gtk.CssProvider()
+        # Keep existing CSS styles
         css = """
-        .chrono-frame { background-color: #4e342e; border-radius: 15px; border: 4px solid #2d1b18; }
+        .chrono-frame { background-color: #4e342e; border-radius: 15px; padding: 20px; }
         .dial { 
-            font-size: 48px; 
-            font-family: 'Monospace';
-            background: #fdf5e6; 
-            color: #444; 
-            border-radius: 15px; 
-            padding: 20px;
-            border: 5px solid #8d6e63;
+            font-size: 48px; font-family: 'Monospace'; background: #fdf5e6; 
+            color: #444; border-radius: 15px; padding: 20px; border: 5px solid #8d6e63;
         }
-        .active-dial { 
-            border: 5px solid #d4a017; /* Gold highlight for active clock */
-            background: #ffffff;
-            color: #000;
-        }
-        .plunger-button { 
-            margin: 20px; 
-            padding: 15px; 
-            font-weight: bold; 
-            background: #3e2723;
-            color: #d7ccc8;
-        }
-        .stop-button {
-            margin: 0 20px 20px 20px;
-            padding: 10px;
-            background: #263238;
-            color: #eceff1;
-            border: 1px solid #455a64;
-        }
-        .stop-button:hover {
-            background: #b71c1c; /* Turns red on hover to signal danger/reset */
-        }
+        .active-dial { border: 5px solid #d4a017; background: #ffffff; color: #000; }
+        .plunger-button { margin: 10px; padding: 15px; background: #3e2723; color: #d7ccc8; font-weight: bold; }
+        .stop-button { margin: 10px; padding: 10px; background: #263238; color: #eceff1; }
+        .stop-button:hover { background: #b71c1c; }
         """
         css_provider.load_from_data(css.encode())
         Gtk.StyleContext.add_provider_for_display(
@@ -171,5 +230,6 @@ class ChronoApp(Adw.Application):
         win.present()
 
 
-app = ChronoApp()
-app.run(None)
+if __name__ == "__main__":
+    app = ChronoApp()
+    app.run(None)
