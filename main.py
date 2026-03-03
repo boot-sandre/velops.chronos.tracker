@@ -1,93 +1,159 @@
 import gi
 import time
-import sqlite3
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Gio, GLib, Adw
+from gi.repository import Gtk, GLib, Adw
 
 
-class DatabaseManager:
-    def __init__(self):
-        self.conn = sqlite3.connect("timesheet.db")
-        self.cursor = self.conn.cursor()
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_name TEXT,
-                start_time TEXT,
-                duration_seconds REAL
-            )
-        """)
-        self.conn.commit()
-
-    def log_entry(self, name, start, duration):
-        self.cursor.execute(
-            "INSERT INTO entries (task_name, start_time, duration_seconds) VALUES (?, ?, ?)",
-            (name, start, duration),
-        )
-        self.conn.commit()
-
-
-class ChessChronometer(Gtk.ApplicationWindow):
+class DualChessChrono(Gtk.ApplicationWindow):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.db = DatabaseManager()
-        self.set_title("Grandmaster Timesheet")
-        self.set_default_size(450, 400)
+        self.set_title("VelOps Productivity")
+        self.set_default_size(600, 400)
 
-        self.active_task_start = 0
-        self.start_timestamp_str = ""
-        self.is_running = False
+        # 0 = Stopped, 1 = Work Active, 2 = Break Active
+        self.state = 0
+        self.work_elapsed = 0
+        self.break_elapsed = 0
+        self.last_tick = 0
 
         self.build_ui()
         self.apply_css()
 
+        # Start the global heartbeat (10fps is enough for UI)
+        GLib.timeout_add(100, self.update_clocks)
+
     def build_ui(self):
-        # Main Layout
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
-        content.set_margin_top(20)
-        content.set_margin_bottom(20)
-        content.set_margin_start(20)
-        content.set_margin_end(20)
-        content.add_css_class("chrono-frame")
-        self.set_child(content)
+        main_layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        main_layout.set_margin_end(20)
+        main_layout.add_css_class("chrono-frame")
+        self.set_child(main_layout)
 
-        # Task Input
-        self.task_entry = Gtk.Entry(placeholder_text="Current Task / Opening...")
-        content.append(self.task_entry)
+        # The Dual Clock Display
+        clock_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        clock_hbox.set_homogeneous(True)
 
-        # The Clock Face
-        self.label_time = Gtk.Label(label="00:00:00")
-        self.label_time.add_css_class("dial")
-        content.append(self.label_time)
+        # Work Side (Left)
+        work_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.work_label = Gtk.Label(label="00:00:00")
+        self.work_label.add_css_class("dial")
+        work_vbox.append(Gtk.Label(label="PROJECT WORK"))
+        work_vbox.append(self.work_label)
 
-        # Plunger Button
-        self.toggle_btn = Gtk.Button(label="PUSH PLUNGER")
+        # Break Side (Right)
+        break_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.break_label = Gtk.Label(label="00:00:00")
+        self.break_label.add_css_class("dial")
+        break_vbox.append(Gtk.Label(label="PAUSE / IDLE"))
+        break_vbox.append(self.break_label)
+
+        clock_hbox.append(work_vbox)
+        clock_hbox.append(break_vbox)
+        main_layout.append(clock_hbox)
+
+        # The Toggle Button (The Plunger)
+        self.toggle_btn = Gtk.Button(label="START SESSION")
         self.toggle_btn.add_css_class("plunger-button")
-        self.toggle_btn.set_vexpand(True)
-        self.toggle_btn.connect("clicked", self.on_toggle_timer)
-        content.append(self.toggle_btn)
+        self.toggle_btn.connect("clicked", self.on_toggle)
+        main_layout.append(self.toggle_btn)
+
+        # Stop and Reset Button
+        self.stop_btn = Gtk.Button(label="STOP & RESET SESSION")
+        self.stop_btn.add_css_class("stop-button")
+        self.stop_btn.connect("clicked", self.on_stop)
+        main_layout.append(self.stop_btn)
+
+    def on_toggle(self, btn):
+        now = time.time()
+        if self.state == 0 or self.state == 2:
+            self.state = 1  # Switch to Work
+            self.work_label.add_css_class("active-dial")
+            self.break_label.remove_css_class("active-dial")
+            btn.set_label("SWITCH TO BREAK")
+        else:
+            self.state = 2  # Switch to Break
+            self.break_label.add_css_class("active-dial")
+            self.work_label.remove_css_class("active-dial")
+            btn.set_label("SWITCH TO WORK")
+
+        self.last_tick = now
+
+    def on_stop(self, btn):
+        # Stop everything
+        self.state = 0
+
+        # Summary for the user
+        print(
+            f"Session Ended.\nWork: {self.format_time(self.work_elapsed)}\nBreak: {self.format_time(self.break_elapsed)}"
+        )
+
+        # Reset counters
+        self.work_elapsed = 0
+        self.break_elapsed = 0
+
+        # Reset UI
+        self.work_label.set_label("00:00:00")
+        self.break_label.set_label("00:00:00")
+        self.work_label.remove_css_class("active-dial")
+        self.break_label.remove_css_class("active-dial")
+        self.toggle_btn.set_label("START SESSION")
+
+    def update_clocks(self):
+        if self.state == 0:
+            return True
+
+        now = time.time()
+        delta = now - self.last_tick
+        self.last_tick = now
+
+        if self.state == 1:
+            self.work_elapsed += delta
+        elif self.state == 2:
+            self.break_elapsed += delta
+
+        # Update labels
+        self.work_label.set_label(self.format_time(self.work_elapsed))
+        self.break_label.set_label(self.format_time(self.break_elapsed))
+        return True
+
+    def format_time(self, seconds):
+        return time.strftime("%H:%M:%S", time.gmtime(seconds))
 
     def apply_css(self):
         css_provider = Gtk.CssProvider()
-        # Using a string here for portability, but you can use load_from_path
         css = """
-        .chrono-frame { background-color: #3e2723; border-radius: 12px; }
+        .chrono-frame { background-color: #4e342e; border-radius: 15px; border: 4px solid #2d1b18; }
         .dial { 
-            font-size: 64px; 
-            background: #f5f5dc; 
-            color: #222; 
-            border-radius: 100px; 
-            padding: 40px;
-            margin: 10px;
-            border: 8px solid #1a1a1a;
+            font-size: 48px; 
+            font-family: 'Monospace';
+            background: #fdf5e6; 
+            color: #444; 
+            border-radius: 15px; 
+            padding: 20px;
+            border: 5px solid #8d6e63;
+        }
+        .active-dial { 
+            border: 5px solid #d4a017; /* Gold highlight for active clock */
+            background: #ffffff;
+            color: #000;
         }
         .plunger-button { 
+            margin: 20px; 
+            padding: 15px; 
             font-weight: bold; 
-            font-size: 18px; 
-            background: #b71c1c; 
-            color: white; 
+            background: #3e2723;
+            color: #d7ccc8;
+        }
+        .stop-button {
+            margin: 0 20px 20px 20px;
+            padding: 10px;
+            background: #263238;
+            color: #eceff1;
+            border: 1px solid #455a64;
+        }
+        .stop-button:hover {
+            background: #b71c1c; /* Turns red on hover to signal danger/reset */
         }
         """
         css_provider.load_from_data(css.encode())
@@ -95,39 +161,13 @@ class ChessChronometer(Gtk.ApplicationWindow):
             self.get_display(), css_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
         )
 
-    def on_toggle_timer(self, btn):
-        if not self.is_running:
-            self.is_running = True
-            self.active_task_start = time.time()
-            self.start_timestamp_str = time.ctime()
-            self.toggle_btn.set_label("STOP MOVE")
-            self.toggle_btn.remove_css_class("plunger-button")
-            self.toggle_btn.add_css_class("suggested-action")  # GTK blue
-            GLib.timeout_add(100, self.update_clock)
-        else:
-            self.is_running = False
-            duration = time.time() - self.active_task_start
-            self.db.log_entry(
-                self.task_entry.get_text(), self.start_timestamp_str, duration
-            )
-            self.toggle_btn.set_label("START MOVE")
-            self.toggle_btn.remove_css_class("suggested-action")
-            self.toggle_btn.add_css_class("plunger-button")
-
-    def update_clock(self):
-        if not self.is_running:
-            return False
-        elapsed = time.time() - self.active_task_start
-        self.label_time.set_label(time.strftime("%H:%M:%S", time.gmtime(elapsed)))
-        return True
-
 
 class ChronoApp(Adw.Application):
     def __init__(self):
         super().__init__(application_id="com.lynx.chesschrono")
 
     def do_activate(self):
-        win = ChessChronometer(application=self)
+        win = DualChessChrono(application=self)
         win.present()
 
 
