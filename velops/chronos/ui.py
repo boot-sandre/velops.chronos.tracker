@@ -19,123 +19,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import time
 from datetime import datetime
+import importlib.resources
+from velops.chronos.db import DatabaseManager
 
 import gi
 
 gi.require_version("Gtk", "4.0")  # noqa
 from gi.repository import Gtk, GLib, Gdk, Pango  # noqa
-
-from velops.chronos.db import DatabaseManager  # noqa
-
-
-# CSS  (Catppuccin Mocha palette)
-APP_CSS = """
-window              { background-color: #1e1e2e; color: #cdd6f4; }
-
-treeview            { background-color: #181825; color: #cdd6f4; }
-treeview:selected   { background-color: #45475a; color: #cdd6f4; }
-treeview header button {
-    background-color: #313244;
-    color: #a6adc8;
-    font-weight: bold;
-    font-size: 12px;
-    padding: 6px 10px;
-    border: none;
-    border-bottom: 1px solid #45475a;
-}
-
-.toolbar {
-    background-color: #181825;
-    padding: 6px 12px;
-    border-bottom: 1px solid #313244;
-}
-.toolbar button { border-radius: 6px; padding: 5px 14px; font-size: 13px; }
-
-/* chrono panel */
-.chrono-panel {
-    background-color: #11111b;
-    border-top: 1px solid #313244;
-}
-.chrono-title {
-    font-size: 11px;
-    font-weight: bold;
-    letter-spacing: 3px;
-    color: #585b70;
-}
-
-/* timer card */
-.timer-box {
-    background-color: #1e1e2e;
-    border-radius: 12px;
-    padding: 14px 20px;
-    margin: 4px;
-    min-width: 200px;
-    min-height: 108px;
-}
-.timer-work     { border-top: 3px solid #89b4fa; }
-.timer-free     { border-top: 3px solid #a6e3a1; }
-.timer-glow     { border: 2px solid #cba6f7; border-radius: 12px; }
-
-.timer-title {
-    font-size: 10px;
-    font-weight: bold;
-    letter-spacing: 2px;
-    color: #a6adc8;
-    margin-bottom: 6px;
-}
-.timer-display {
-    font-size: 36px;
-    font-weight: bold;
-    font-family: "JetBrains Mono","Fira Code","Monospace";
-    color: #cdd6f4;
-    margin: 2px 0;
-}
-.timer-state { font-size: 11px; font-weight: bold; letter-spacing: 1px; }
-.state-active { color: #a6e3a1; }
-.state-paused { color: #fab387; }
-.state-idle   { color: #585b70; }
-
-/* action buttons */
-.btn-start {
-    background-color: #89b4fa;
-    color: #1e1e2e;
-    font-weight: bold;
-    border-radius: 999px;
-    padding: 8px 28px;
-    font-size: 13px;
-    border: none;
-    min-width: 190px;
-}
-.btn-start:hover  { background-color: #b4d0fb; }
-.btn-start:disabled { opacity: 0.45; }
-
-.btn-stop {
-    background-color: #f38ba8;
-    color: #1e1e2e;
-    font-weight: bold;
-    border-radius: 999px;
-    padding: 8px 28px;
-    font-size: 13px;
-    border: none;
-    min-width: 190px;
-}
-.btn-stop:hover    { background-color: #f7b8c8; }
-.btn-stop:disabled { opacity: 0.35; }
-
-/* suggested / destructive (dialogs) */
-button.suggested-action  { background-color: #89b4fa; color: #1e1e2e; font-weight: bold; }
-button.destructive-action{ background-color: #f38ba8; color: #1e1e2e; font-weight: bold; }
-
-/* misc */
-.dim-label { color: #6c7086; font-size: 12px; }
-.info-bar  { background-color: #181825; padding: 5px 14px;
-             border-top: 1px solid #313244; }
-"""
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# § 3  DIALOGS
-# ══════════════════════════════════════════════════════════════════════════════
 
 
 class FieldDialog(Gtk.Dialog):
@@ -332,7 +222,11 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _load_css(self) -> None:
         prov = Gtk.CssProvider()
-        prov.load_from_data(APP_CSS)
+        css_resource = importlib.resources.files("velops.chronos") / "style.css"
+
+        with importlib.resources.as_file(css_resource) as css_path:
+            prov.load_from_path(str(css_path))
+
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )

@@ -19,3 +19,6 @@ chronos = "velops.chronos.tracker:launch_gui"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["velops*"]
+
+[tool.setuptools.package-data]
+"velops.chronos" = ["*.css"]
