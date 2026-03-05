@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-""" VelOps Chronos Tracker: Track your work time with effortless workflow
-    Copyright (C) 2026  Simon ANDRÉ
+"""VelOps Chronos Tracker: Track your work time with effortless workflow
+Copyright (C) 2026  Simon ANDRÉ
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
+
 from pathlib import Path
 import sqlite3
 
@@ -37,7 +38,8 @@ class DatabaseManager:
         self._create_schema()
 
     def _create_schema(self) -> None:
-        self._conn.executescript("""
+        self._conn.executescript(
+            """
         CREATE TABLE IF NOT EXISTS project (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             name        TEXT    NOT NULL UNIQUE,
@@ -80,7 +82,8 @@ class DatabaseManager:
         CREATE INDEX IF NOT EXISTS idx_ts_proj   ON timesheet(project_id);
         CREATE INDEX IF NOT EXISTS idx_ts_task   ON timesheet(task_id);
         CREATE INDEX IF NOT EXISTS idx_ts_start  ON timesheet(start_time);
-        """)
+        """
+        )
         self._conn.commit()
 
     def get_projects(self) -> list:
