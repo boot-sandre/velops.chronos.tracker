@@ -1,208 +1,35 @@
 #!/usr/bin/env python3
+""" 
+    VelOps Chronos Tracker: Track your work time with effortless workflow
+    Copyright (C) 2026  Simon ANDRÉ
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
-╔══════════════════════════════════════════════════════════════════╗
-║  LynxAI Time Tracker  ·  v1.0                                  ║
-║  Stack : GTK4 · Python 3.10+ · SQLite3 (stdlib)                ║
-║  DB    : ~/.local/share/lynxai/timetracker.db                   ║
-╠══════════════════════════════════════════════════════════════════╣
-║  Install deps                                                   ║
-║   Ubuntu/Debian : sudo apt install python3-gi gir1.2-gtk-4.0   ║
-║   Fedora        : sudo dnf install python3-gobject gtk4         ║
-║   Arch          : sudo pacman -S python-gobject gtk4            ║
-╚══════════════════════════════════════════════════════════════════╝
-"""
+import time
+from datetime import datetime
 
 import gi
+gi.require_version('Gtk', '4.0')    # noqa
+from gi.repository import Gtk, GLib, Gdk, Pango # noqa
 
-gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk, GLib, Gdk, Pango
-
-import sqlite3, time, os
-from datetime import datetime
-from pathlib import Path
+from velops.chronos.db import DatabaseManager   # noqa
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# § 1  DATABASE MANAGER
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-class DatabaseManager:
-    """
-    SQLite connector.
-    Creates (if not exist) three tables: project · task · timesheet
-    """
-
-    def __init__(self, db_path: str | None = None):
-        if db_path is None:
-            base = Path.home() / ".local" / "share" / "lynxai"
-            base.mkdir(parents=True, exist_ok=True)
-            db_path = str(base / "timetracker.db")
-        self._path = db_path
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        self._create_schema()
-
-    # ── schema ────────────────────────────────────────────────────────────────
-    def _create_schema(self) -> None:
-        self._conn.executescript("""
-        -- ── Table: project ──────────────────────────────────────────────────
-        CREATE TABLE IF NOT EXISTS project (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT    NOT NULL UNIQUE,
-            description TEXT    NOT NULL DEFAULT '',
-            color       TEXT    NOT NULL DEFAULT '#3584e4',
-            created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-            updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
-
-        -- ── Table: task ──────────────────────────────────────────────────────
-        CREATE TABLE IF NOT EXISTS task (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id  INTEGER NOT NULL,
-            name        TEXT    NOT NULL,
-            description TEXT    NOT NULL DEFAULT '',
-            status      TEXT    NOT NULL DEFAULT 'pending'
-                                 CHECK (status IN
-                                   ('pending','in_progress','done','cancelled')),
-            created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-            updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-            UNIQUE (project_id, name),
-            FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE
-        );
-
-        -- ── Table: timesheet ─────────────────────────────────────────────────
-        CREATE TABLE IF NOT EXISTS timesheet (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id       INTEGER,
-            task_id          INTEGER,
-            entry_type       TEXT    NOT NULL
-                                     CHECK (entry_type IN ('work','freetime')),
-            start_time       TEXT    NOT NULL,
-            end_time         TEXT,
-            duration_seconds INTEGER NOT NULL DEFAULT 0,
-            notes            TEXT    NOT NULL DEFAULT '',
-            created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE SET NULL,
-            FOREIGN KEY (task_id)    REFERENCES task(id)    ON DELETE SET NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_task_proj ON task(project_id);
-        CREATE INDEX IF NOT EXISTS idx_ts_proj   ON timesheet(project_id);
-        CREATE INDEX IF NOT EXISTS idx_ts_task   ON timesheet(task_id);
-        CREATE INDEX IF NOT EXISTS idx_ts_start  ON timesheet(start_time);
-        """)
-        self._conn.commit()
-
-    # ── project CRUD ──────────────────────────────────────────────────────────
-    def get_projects(self) -> list:
-        return self._conn.execute(
-            "SELECT id, name, description, color FROM project ORDER BY name"
-        ).fetchall()
-
-    def add_project(
-        self, name: str, description: str = "", color: str = "#3584e4"
-    ) -> int:
-        cur = self._conn.execute(
-            "INSERT INTO project(name,description,color) VALUES(?,?,?)",
-            (name, description, color),
-        )
-        self._conn.commit()
-        return cur.lastrowid
-
-    def delete_project(self, pid: int) -> None:
-        self._conn.execute("DELETE FROM project WHERE id=?", (pid,))
-        self._conn.commit()
-
-    # ── task CRUD ─────────────────────────────────────────────────────────────
-    def get_tasks(self, project_id: int) -> list:
-        return self._conn.execute(
-            "SELECT id, project_id, name, description, status "
-            "FROM task WHERE project_id=? ORDER BY name",
-            (project_id,),
-        ).fetchall()
-
-    def add_task(
-        self, project_id: int, name: str, description: str = "", status: str = "pending"
-    ) -> int:
-        cur = self._conn.execute(
-            "INSERT INTO task(project_id,name,description,status) VALUES(?,?,?,?)",
-            (project_id, name, description, status),
-        )
-        self._conn.commit()
-        return cur.lastrowid
-
-    def delete_task(self, tid: int) -> None:
-        self._conn.execute("DELETE FROM task WHERE id=?", (tid,))
-        self._conn.commit()
-
-    # ── timesheet ─────────────────────────────────────────────────────────────
-    def record_session(
-        self,
-        project_id,
-        task_id,
-        entry_type: str,
-        start_time: str,
-        end_time: str,
-        duration_seconds: int,
-        notes: str = "",
-    ) -> int:
-        cur = self._conn.execute(
-            "INSERT INTO timesheet"
-            "(project_id,task_id,entry_type,start_time,end_time,"
-            " duration_seconds,notes)"
-            " VALUES(?,?,?,?,?,?,?)",
-            (
-                project_id,
-                task_id,
-                entry_type,
-                start_time,
-                end_time,
-                duration_seconds,
-                notes,
-            ),
-        )
-        self._conn.commit()
-        return cur.lastrowid
-
-    def get_sessions(self, project_id=None, task_id=None, limit: int = 200) -> list:
-        where, params = [], []
-        if project_id:
-            where.append("ts.project_id=?")
-            params.append(project_id)
-        if task_id:
-            where.append("ts.task_id=?")
-            params.append(task_id)
-        clause = ("WHERE " + " AND ".join(where)) if where else ""
-        return self._conn.execute(
-            f"""
-            SELECT ts.id, p.name AS proj, t.name AS task,
-                   ts.entry_type, ts.start_time, ts.end_time, ts.duration_seconds
-            FROM   timesheet ts
-            LEFT JOIN project p ON ts.project_id = p.id
-            LEFT JOIN task    t ON ts.task_id    = t.id
-            {clause}
-            ORDER BY ts.start_time DESC LIMIT ?
-        """,
-            params + [limit],
-        ).fetchall()
-
-    def close(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# § 2  CSS  (Catppuccin Mocha palette)
-# ══════════════════════════════════════════════════════════════════════════════
-
+# CSS  (Catppuccin Mocha palette)
 APP_CSS = """
-/* ── root ──────────────────────────────────────────────────── */
 window              { background-color: #1e1e2e; color: #cdd6f4; }
 
-/* ── tree ──────────────────────────────────────────────────── */
 treeview            { background-color: #181825; color: #cdd6f4; }
 treeview:selected   { background-color: #45475a; color: #cdd6f4; }
 treeview header button {
@@ -215,7 +42,6 @@ treeview header button {
     border-bottom: 1px solid #45475a;
 }
 
-/* ── toolbar ────────────────────────────────────────────────── */
 .toolbar {
     background-color: #181825;
     padding: 6px 12px;
@@ -223,7 +49,7 @@ treeview header button {
 }
 .toolbar button { border-radius: 6px; padding: 5px 14px; font-size: 13px; }
 
-/* ── chrono panel ───────────────────────────────────────────── */
+/* chrono panel */
 .chrono-panel {
     background-color: #11111b;
     border-top: 1px solid #313244;
@@ -235,7 +61,7 @@ treeview header button {
     color: #585b70;
 }
 
-/* ── timer card ─────────────────────────────────────────────── */
+/* timer card */
 .timer-box {
     background-color: #1e1e2e;
     border-radius: 12px;
@@ -267,7 +93,7 @@ treeview header button {
 .state-paused { color: #fab387; }
 .state-idle   { color: #585b70; }
 
-/* ── action buttons ─────────────────────────────────────────── */
+/* action buttons */
 .btn-start {
     background-color: #89b4fa;
     color: #1e1e2e;
@@ -298,7 +124,7 @@ treeview header button {
 button.suggested-action  { background-color: #89b4fa; color: #1e1e2e; font-weight: bold; }
 button.destructive-action{ background-color: #f38ba8; color: #1e1e2e; font-weight: bold; }
 
-/* ── misc ───────────────────────────────────────────────────── */
+/* misc */
 .dim-label { color: #6c7086; font-size: 12px; }
 .info-bar  { background-color: #181825; padding: 5px 14px;
              border-top: 1px solid #313244; }
@@ -470,13 +296,7 @@ class ConfirmDialog(Gtk.Dialog):
         area.append(b)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# § 4  MAIN WINDOW
-# ══════════════════════════════════════════════════════════════════════════════
-
-
 class MainWindow(Gtk.ApplicationWindow):
-    # TreeStore column indices ─────────────────────────────────────────────────
     _C_LABEL = 0  # str  — visible name
     _C_KIND = 1  # str  — 'project' | 'task'
     _C_ID = 2  # int  — DB row id
@@ -486,15 +306,15 @@ class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, application: Gtk.Application, db: DatabaseManager):
         super().__init__(application=application)
         self.db = db
-        self.set_title("LynxAI — Time Tracker")
+        self.set_title("VelOps — Time Tracker")
         self.set_default_size(860, 740)
 
-        # ── selection state ───────────────────────────────────────────────────
+        # User current selection
         self._sel_project_id: int | None = None
         self._sel_task_id: int | None = None
         self._sel_label: str = ""
 
-        # ── chronometer state ─────────────────────────────────────────────────
+        # Chronometer state
         self._active: str | None = None  # 'work' | 'freetime' | None
         self._work_secs: int = 0
         self._free_secs: int = 0
@@ -503,12 +323,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self._tick_src: int | None = None
         self._session_start: str | None = None
 
-        # ── build ─────────────────────────────────────────────────────────────
+        # Build 
         self._load_css()
         self._build_ui()
         self._refresh_tree()
 
-    # ── CSS ───────────────────────────────────────────────────────────────────
     def _load_css(self) -> None:
         prov = Gtk.CssProvider()
         prov.load_from_data(APP_CSS)
@@ -516,7 +335,6 @@ class MainWindow(Gtk.ApplicationWindow):
             Gdk.Display.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
-    # ── UI builders ───────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_child(root)
@@ -525,7 +343,7 @@ class MainWindow(Gtk.ApplicationWindow):
         hb = Gtk.HeaderBar()
         hb.set_show_title_buttons(True)
         ttl = Gtk.Label()
-        ttl.set_markup("<b>🦁  LynxAI — Time Tracker</b>")
+        ttl.set_markup("<b>🦁  VelOps — Time Tracker</b>")
         hb.set_title_widget(ttl)
         self.set_titlebar(hb)
 
@@ -543,7 +361,6 @@ class MainWindow(Gtk.ApplicationWindow):
         root.append(self._mk_chrono())
         root.append(self._mk_statusbar())
 
-    # ── toolbar ───────────────────────────────────────────────────────────────
     def _mk_toolbar(self) -> Gtk.Box:
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         bar.add_css_class("toolbar")
@@ -581,7 +398,6 @@ class MainWindow(Gtk.ApplicationWindow):
             bar.append(w)
         return bar
 
-    # ── tree view ─────────────────────────────────────────────────────────────
     def _mk_tree(self) -> Gtk.TreeView:
         # columns: label · kind · id · project_id · status
         self._store = Gtk.TreeStore(str, str, int, int, str)
@@ -607,7 +423,6 @@ class MainWindow(Gtk.ApplicationWindow):
         _col("Status", self._C_STATUS, 110)
         return tv
 
-    # ── chronometer panel ─────────────────────────────────────────────────────
     def _mk_chrono(self) -> Gtk.Box:
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         panel.add_css_class("chrono-panel")
@@ -618,7 +433,7 @@ class MainWindow(Gtk.ApplicationWindow):
         ttl.set_margin_bottom(10)
         panel.append(ttl)
 
-        # ── two timer cards ────────────────────────────────────────────────
+        # Two timer cards
         cards = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=14, homogeneous=True
         )
@@ -629,7 +444,7 @@ class MainWindow(Gtk.ApplicationWindow):
         cards.append(self._mk_card("freetime"))
         panel.append(cards)
 
-        # ── control buttons ────────────────────────────────────────────────
+        # Control buttons
         btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         btn_row.set_halign(Gtk.Align.CENTER)
         btn_row.set_margin_bottom(12)
@@ -683,7 +498,6 @@ class MainWindow(Gtk.ApplicationWindow):
             self._free_card = card
         return card
 
-    # ── status bar ────────────────────────────────────────────────────────────
     def _mk_statusbar(self) -> Gtk.Box:
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         bar.add_css_class("info-bar")
@@ -694,7 +508,6 @@ class MainWindow(Gtk.ApplicationWindow):
         bar.append(self._info)
         return bar
 
-    # ── tree helpers ──────────────────────────────────────────────────────────
     def _refresh_tree(self) -> None:
         self._store.clear()
         for p in self.db.get_projects():
@@ -712,7 +525,6 @@ class MainWindow(Gtk.ApplicationWindow):
         return tuple(model.get_value(it, i) for i in range(5))
         # → (label, kind, id, pid, status)
 
-    # ── selection changed ─────────────────────────────────────────────────────
     def _on_tree_sel(self, _sel: Gtk.TreeSelection) -> None:
         data = self._selected()
         if data is None:
@@ -756,7 +568,6 @@ class MainWindow(Gtk.ApplicationWindow):
         )
         dlg.show()
 
-    # ── CRUD — add project ────────────────────────────────────────────────────
     def _on_add_project(self, _btn) -> None:
         dlg = FieldDialog(
             self,
@@ -777,7 +588,6 @@ class MainWindow(Gtk.ApplicationWindow):
                 self._refresh_tree()
         dlg.destroy()
 
-    # ── CRUD — add task ───────────────────────────────────────────────────────
     def _on_add_task(self, _btn) -> None:
         if self._sel_project_id is None:
             return
@@ -800,7 +610,6 @@ class MainWindow(Gtk.ApplicationWindow):
                 self._refresh_tree()
         dlg.destroy()
 
-    # ── CRUD — delete ─────────────────────────────────────────────────────────
     def _on_delete(self, _btn) -> None:
         data = self._selected()
         if data is None:
@@ -821,7 +630,6 @@ class MainWindow(Gtk.ApplicationWindow):
             self._refresh_tree()
         dlg.destroy()
 
-    # ── timer helpers ─────────────────────────────────────────────────────────
     @staticmethod
     def _fmt(secs: int) -> str:
         h, r = divmod(max(0, secs), 3600)
@@ -871,12 +679,10 @@ class MainWindow(Gtk.ApplicationWindow):
             )
         return True  # keep GLib source alive
 
-    # ── ▶  START / SWITCH ─────────────────────────────────────────────────────
     def _on_start_switch(self, _btn) -> None:
         now = time.monotonic()
 
         if self._active is None:
-            # ── initial start: begin WORK ─────────────────────────────────
             self._session_start = datetime.now().isoformat(timespec="seconds")
             self._work_t0 = now
             self._active = "work"
@@ -888,7 +694,6 @@ class MainWindow(Gtk.ApplicationWindow):
             self._info.set_text(f"⏱  Working on: {self._sel_label or '(no selection)'}")
 
         elif self._active == "work":
-            # ── work → freetime ───────────────────────────────────────────
             self._freeze_active()
             self._free_t0 = now
             self._active = "freetime"
@@ -898,7 +703,6 @@ class MainWindow(Gtk.ApplicationWindow):
             self._info.set_text("☕  Free time running…")
 
         else:
-            # ── freetime → work ───────────────────────────────────────────
             self._freeze_active()
             self._work_t0 = now
             self._active = "work"
@@ -907,7 +711,6 @@ class MainWindow(Gtk.ApplicationWindow):
             self._btn_start.set_label("⇄  Switch → Free Time")
             self._info.set_text(f"⏱  Working on: {self._sel_label or '(no selection)'}")
 
-    # ── ⏹  STOP & RECORD ────────────────────────────────────────────────────
     def _on_stop_record(self, _btn) -> None:
         if self._active is None:
             return
@@ -939,7 +742,6 @@ class MainWindow(Gtk.ApplicationWindow):
         saved_w = self._work_secs
         saved_f = self._free_secs
 
-        # ── full reset ────────────────────────────────────────────────────
         if self._tick_src is not None:
             GLib.source_remove(self._tick_src)
             self._tick_src = None
@@ -957,41 +759,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self._btn_start.set_label("▶  Start")
         self._btn_stop.set_sensitive(False)
         self._info.set_text(
-            f"✅  Saved — work: {self._fmt(saved_w)}  |  free: {self._fmt(saved_f)}"
+            f"Saved — work: {self._fmt(saved_w)}  |  free: {self._fmt(saved_f)}"
         )
 
-    # ── cleanup ───────────────────────────────────────────────────────────────
     def do_close_request(self) -> bool:
         if self._tick_src is not None:
             GLib.source_remove(self._tick_src)
         return False  # allow window to close
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# § 5  APPLICATION ENTRY POINT
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-class LynxAIApp(Gtk.Application):
-    def __init__(self):
-        super().__init__(application_id="ai.lynx.timetracker")
-        self._db: DatabaseManager | None = None
-
-    def do_activate(self) -> None:
-        self._db = DatabaseManager()
-        win = MainWindow(application=self, db=self._db)
-        win.connect("close-request", self._on_win_close)
-        win.present()
-
-    def _on_win_close(self, _win) -> bool:
-        if self._db:
-            self._db.close()
-        return False
-
-
-def main() -> None:
-    LynxAIApp().run()
-
-
-if __name__ == "__main__":
-    main()
