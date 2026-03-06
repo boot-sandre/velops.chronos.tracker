@@ -104,7 +104,7 @@ class TestMainWindow(unittest.TestCase):
 
     def setUp(self):
         self.mock_db = MagicMock(spec=DatabaseManager)
-        self.mock_db.get_projects.return_value = []  
+        self.mock_db.get_projects.return_value = []
         unique_id = f"eu.velops.chronos.tests.diag_field_{uuid.uuid4()}"
         self.app = Gtk.Application(application_id=unique_id)
 
@@ -126,7 +126,7 @@ class TestMainWindow(unittest.TestCase):
         self.assertFalse(self.win._btn_add_task.get_sensitive())
         self.assertFalse(self.win._btn_del.get_sensitive())
         self.assertFalse(self.win._btn_stop.get_sensitive())
-        self.assertEqual(self.win._active, None)
+        self.assertEqual(self.win.tracker.is_active, False)
 
     @patch("velops.chronos.ui.FieldDialog")
     def test_add_project_logic(self, MockDialog):
@@ -212,8 +212,8 @@ class TestMainWindow(unittest.TestCase):
             # 2. START (Work)
             self.win._on_start_switch(None)
 
-            self.assertEqual(self.win._active, "work")
-            self.assertIsNotNone(self.win._work_t0)
+            self.assertEqual(self.win.tracker.is_active, True)
+            self.assertIsNotNone(self.win.tracker.active_kind)
             self.assertTrue(self.win._btn_stop.get_sensitive())
             mock_timeout.assert_called()  # Check GLib timer started
 
@@ -223,12 +223,11 @@ class TestMainWindow(unittest.TestCase):
             self.win._on_start_switch(None)  # Switch
 
             # Check Work accumulated correctly
-            self.assertEqual(self.win._work_secs, 3600)
-            self.assertIsNone(self.win._work_t0)  # Reset because paused
+            self.assertEqual(self.win.tracker._work_secs, 3600)
 
             # Check Free Time started
-            self.assertEqual(self.win._active, "freetime")
-            self.assertIsNotNone(self.win._free_t0)
+            self.assertEqual(self.win.tracker.active_kind, "freetime")
+            self.assertIsNotNone(self.win.tracker._t0)
 
             # 4. Advance time by 1800 seconds and STOP
             mock_monotonic.return_value = 6400.0  # +1 hour (prev) + 30 mins
@@ -256,9 +255,9 @@ class TestMainWindow(unittest.TestCase):
             self.assertEqual(args_free[5], 1800)  # Duration
 
             # 6. Verify Reset State
-            self.assertIsNone(self.win._active)
-            self.assertEqual(self.win._work_secs, 0)
-            self.assertEqual(self.win._free_secs, 0)
+            self.assertIsNone(self.win.tracker.active_kind)
+            self.assertEqual(self.win.tracker._work_secs, 0)
+            self.assertEqual(self.win.tracker._free_secs, 0)
             self.assertFalse(self.win._btn_stop.get_sensitive())
 
     def test_format_helper(self):

@@ -20,6 +20,7 @@ import time
 from datetime import datetime
 import importlib.resources
 from velops.chronos.db import DatabaseManager
+from velops.chronos.session import SessionTracker
 
 import gi
 
@@ -197,6 +198,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, application: Gtk.Application, db: DatabaseManager):
         super().__init__(application=application)
         self.db = db
+        self.tracker = SessionTracker(db)
         self.set_title("VelOps — Time Tracker")
         self.set_default_size(860, 740)
 
@@ -205,14 +207,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._sel_task_id: int | None = None
         self._sel_label: str = ""
 
-        # Chronometer state
-        self._active: str | None = None  # 'work' | 'freetime' | None
-        self._work_secs: int = 0
-        self._free_secs: int = 0
-        self._work_t0: float | None = None
-        self._free_t0: float | None = None
+        # UI state management
         self._tick_src: int | None = None
-        self._session_start: str | None = None
 
         # Build
         self._load_css()
@@ -221,7 +217,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _load_css(self) -> None:
         prov = Gtk.CssProvider()
-        css_resource = importlib.resources.files("velops.chronos") / "style.css"
+        css_resource = importlib.resources.files("velops.chronos") / "assets" / "style.css"
 
         with importlib.resources.as_file(css_resource) as css_path:
             prov.load_from_path(str(css_path))
@@ -429,7 +425,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._sel_task_id = None
             self._sel_label = ""
             self._sel_info.set_text("Nothing selected")
-            if self._active is None:
+            if not self.tracker.is_active:  #
                 self._info.set_text("Select a project or task, then press  ▶ Start")
             return
 
@@ -450,7 +446,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._btn_ts.set_sensitive(True)
             self._sel_info.set_text(f"📌  {label}  [{status}]")
 
-        if self._active is None:
+        if not self.tracker.is_active:
             self._info.set_text(
                 f"Will track: {'project' if kind == 'project' else 'task'} — {label}"
             )
@@ -549,38 +545,16 @@ class MainWindow(Gtk.ApplicationWindow):
             lbl.set_text("● IDLE")
             lbl.add_css_class("state-idle")
 
-    def _freeze_active(self) -> None:
-        """Snapshot running elapsed time into accumulator."""
-        now = time.monotonic()
-        if self._active == "work" and self._work_t0 is not None:
-            self._work_secs += int(now - self._work_t0)
-            self._work_t0 = None
-            self._work_disp.set_text(self._fmt(self._work_secs))
-        elif self._active == "freetime" and self._free_t0 is not None:
-            self._free_secs += int(now - self._free_t0)
-            self._free_t0 = None
-            self._free_disp.set_text(self._fmt(self._free_secs))
-
     def _tick(self) -> bool:
         """GLib 500 ms heartbeat — refresh the running counter display."""
-        now = time.monotonic()
-        if self._active == "work" and self._work_t0 is not None:
-            self._work_disp.set_text(
-                self._fmt(self._work_secs + int(now - self._work_t0))
-            )
-        elif self._active == "freetime" and self._free_t0 is not None:
-            self._free_disp.set_text(
-                self._fmt(self._free_secs + int(now - self._free_t0))
-            )
-        return True  # keep GLib source alive
+        work_s, free_s = self.tracker.get_elapsed()  #
+        self._work_disp.set_text(self._fmt(work_s))
+        self._free_disp.set_text(self._fmt(free_s))
+        return True
 
     def _on_start_switch(self, _btn) -> None:
-        now = time.monotonic()
-
-        if self._active is None:
-            self._session_start = datetime.now().isoformat(timespec="seconds")
-            self._work_t0 = now
-            self._active = "work"
+        if not self.tracker.is_active:  #
+            self.tracker.start_or_switch("work")  #
             self._set_card_state("work", "active")
             self._set_card_state("freetime", "paused")
             self._btn_start.set_label("⇄  Switch → Free Time")
@@ -588,63 +562,31 @@ class MainWindow(Gtk.ApplicationWindow):
             self._tick_src = GLib.timeout_add(500, self._tick)
             self._info.set_text(f"⏱  Working on: {self._sel_label or '(no selection)'}")
 
-        elif self._active == "work":
-            self._freeze_active()
-            self._free_t0 = now
-            self._active = "freetime"
+        elif self.tracker.active_kind == "work":  #
+            self.tracker.start_or_switch("freetime")  #
             self._set_card_state("work", "paused")
             self._set_card_state("freetime", "active")
             self._btn_start.set_label("⇄  Switch → Work")
             self._info.set_text("☕  Free time running…")
 
         else:
-            self._freeze_active()
-            self._work_t0 = now
-            self._active = "work"
+            self.tracker.start_or_switch("work")  #
             self._set_card_state("freetime", "paused")
             self._set_card_state("work", "active")
             self._btn_start.set_label("⇄  Switch → Free Time")
             self._info.set_text(f"⏱  Working on: {self._sel_label or '(no selection)'}")
 
     def _on_stop_record(self, _btn) -> None:
-        if self._active is None:
+        if not self.tracker.is_active:  #
             return
 
-        self._freeze_active()
-        now_dt = datetime.now().isoformat(timespec="seconds")
-        start = self._session_start or now_dt
-
-        if self._work_secs > 0:
-            self.db.record_session(
-                self._sel_project_id,
-                self._sel_task_id,
-                "work",
-                start,
-                now_dt,
-                self._work_secs,
-            )
-
-        if self._free_secs > 0:
-            self.db.record_session(
-                self._sel_project_id,
-                self._sel_task_id,
-                "freetime",
-                start,
-                now_dt,
-                self._free_secs,
-            )
-
-        saved_w = self._work_secs
-        saved_f = self._free_secs
+        saved_w, saved_f = self.tracker.stop_and_save(  #
+            self._sel_project_id, self._sel_task_id
+        )
 
         if self._tick_src is not None:
             GLib.source_remove(self._tick_src)
             self._tick_src = None
-
-        self._active = None
-        self._work_secs = self._free_secs = 0
-        self._work_t0 = self._free_t0 = None
-        self._session_start = None
 
         self._work_disp.set_text("00:00:00")
         self._free_disp.set_text("00:00:00")

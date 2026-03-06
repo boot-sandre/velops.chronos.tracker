@@ -32,10 +32,11 @@ dev = [
 
 [project.scripts]
 chronos = "velops.chronos.tracker:launch_gui"
+chronos-install = "velops.chronos.install:install_desktop_integration"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["velops*"]
 
 [tool.setuptools.package-data]
-"velops.chronos" = ["*.css"]
+"velops.chronos" = ["*.css", "assets/*"]

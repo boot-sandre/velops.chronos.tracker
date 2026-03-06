@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=VelOps Chronos
+Comment=Professional project and task time tracker
+Exec=chronos
+Icon=velops.chronos.tracker
+Terminal=false
+Type=Application
+Categories=Utility;Office;TimeTracker;
+StartupNotify=true
