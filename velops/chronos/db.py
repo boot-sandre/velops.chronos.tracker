@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-"""VelOps Chronos Tracker: Track your work time with effortless workflow
+"""
+VelOps Chronos Tracker: Track your work time with effortless workflow
 Copyright (C) 2026  Simon ANDRÉ
 
 This program is free software: you can redistribute it and/or modify
@@ -18,6 +18,32 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from pathlib import Path
 import sqlite3
+from typing import List
+
+
+_connection = None
+
+
+def get_connection():
+    """
+    Singleton pattern to get the database connection.
+    Initializes the connection only when first requested.
+    """
+    global _connection
+    if _connection is None:
+        data_dir = Path.home() / ".local" / "share" / "velops" / "chronos"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        db_path = data_dir / "data.db"
+        _connection = sqlite3.connect(str(db_path), check_same_thread=False)
+        _connection.row_factory = sqlite3.Row
+        _connection.execute("PRAGMA foreign_keys = ON")
+
+    return _connection
+
+
+def get_cursor():
+    """Helper to get a cursor from the active connection."""
+    return get_connection().cursor()
 
 
 class DatabaseManager:
@@ -32,13 +58,13 @@ class DatabaseManager:
             base.mkdir(parents=True, exist_ok=True)
             db_path = str(base / "chronos.db")
         self._path = db_path
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA foreign_keys = ON")
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
         self._create_schema()
 
     def _create_schema(self) -> None:
-        self._conn.executescript(
+        conn = get_connection()
+        conn.executescript(
             """
         CREATE TABLE IF NOT EXISTS project (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,29 +110,33 @@ class DatabaseManager:
         CREATE INDEX IF NOT EXISTS idx_ts_start  ON timesheet(start_time);
         """
         )
-        self._conn.commit()
+        conn.commit()
 
     def get_projects(self) -> list:
-        return self._conn.execute(
+        conn = get_connection()
+        return conn.execute(
             "SELECT id, name, description, color FROM project ORDER BY name"
         ).fetchall()
 
     def add_project(
         self, name: str, description: str = "", color: str = "#3584e4"
     ) -> int:
-        cur = self._conn.execute(
+        conn = get_connection()
+        cur = conn.execute(
             "INSERT INTO project(name,description,color) VALUES(?,?,?)",
             (name, description, color),
         )
-        self._conn.commit()
+        conn.commit()
         return cur.lastrowid
 
     def delete_project(self, pid: int) -> None:
-        self._conn.execute("DELETE FROM project WHERE id=?", (pid,))
-        self._conn.commit()
+        conn = get_connection()
+        conn.execute("DELETE FROM project WHERE id=?", (pid,))
+        conn.commit()
 
     def get_tasks(self, project_id: int) -> list:
-        return self._conn.execute(
+        conn = get_connection()
+        return conn.execute(
             "SELECT id, project_id, name, description, status "
             "FROM task WHERE project_id=? ORDER BY name",
             (project_id,),
@@ -115,16 +145,18 @@ class DatabaseManager:
     def add_task(
         self, project_id: int, name: str, description: str = "", status: str = "pending"
     ) -> int:
-        cur = self._conn.execute(
+        conn = get_connection()
+        cur = conn.execute(
             "INSERT INTO task(project_id,name,description,status) VALUES(?,?,?,?)",
             (project_id, name, description, status),
         )
-        self._conn.commit()
+        conn.commit()
         return cur.lastrowid
 
     def delete_task(self, tid: int) -> None:
-        self._conn.execute("DELETE FROM task WHERE id=?", (tid,))
-        self._conn.commit()
+        conn = get_connection()
+        conn.execute("DELETE FROM task WHERE id=?", (tid,))
+        conn.commit()
 
     def record_session(
         self,
@@ -136,7 +168,8 @@ class DatabaseManager:
         duration_seconds: int,
         notes: str = "",
     ) -> int:
-        cur = self._conn.execute(
+        conn = get_connection()
+        cur = conn.execute(
             "INSERT INTO timesheet"
             "(project_id,task_id,entry_type,start_time,end_time,"
             " duration_seconds,notes)"
@@ -151,10 +184,11 @@ class DatabaseManager:
                 notes,
             ),
         )
-        self._conn.commit()
+        conn.commit()
         return cur.lastrowid
 
-    def get_sessions(self, project_id=None, task_id=None, limit: int = 200) -> list:
+    def get_sessions(self, project_id=None, task_id=None, limit: int = 200) -> List:
+        conn = get_connection()
         where, params = [], []
         if project_id:
             where.append("ts.project_id=?")
@@ -163,7 +197,7 @@ class DatabaseManager:
             where.append("ts.task_id=?")
             params.append(task_id)
         clause = ("WHERE " + " AND ".join(where)) if where else ""
-        return self._conn.execute(
+        return conn.execute(
             f"""
             SELECT ts.id, p.name AS proj, t.name AS task,
                    ts.entry_type, ts.start_time, ts.end_time, ts.duration_seconds
@@ -177,5 +211,6 @@ class DatabaseManager:
         ).fetchall()
 
     def close(self) -> None:
-        if self._conn:
-            self._conn.close()
+        conn = get_connection()
+        if conn:
+            conn.close()

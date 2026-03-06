@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 VelOps Chronos Tracker: Track your work time with effortless workflow
 Copyright (C) 2026  Simon ANDRÉ
