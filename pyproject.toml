@@ -11,7 +11,24 @@ requires-python = ">=3.10"
 license = "GPL-3.0-only WITH Classpath-Exception-2.0 OR BSD-3-Clause"
 dependencies = [
     "pygobject",
+    "PyGObject-stubs",
 ]
+[project.optional-dependencies]
+tests = [
+    "pytest",
+]
+build = [
+    "build",
+    "twine",
+    "pep517",
+]
+dev = [
+    "velops.farmer[tests, build]",
+    "isort",
+    "ruff",
+    "ipdb",
+]
+
 
 [project.scripts]
 chronos = "velops.chronos.tracker:launch_gui"
