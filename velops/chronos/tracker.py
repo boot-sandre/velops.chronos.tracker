@@ -15,7 +15,7 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
-
+import sys
 import gi
 
 gi.require_version("Gtk", "4.0")  # noqa
@@ -29,7 +29,7 @@ class VelOpsApp(Gtk.Application):
     _db: DatabaseManager | None = None
 
     def __init__(self):
-        res = super().__init__(application_id="velops.chronos.tracker")
+        res = super().__init__(application_id="eu.velops.chronos.tracker")
         return res
 
     def do_activate(self) -> None:
@@ -45,7 +45,7 @@ class VelOpsApp(Gtk.Application):
 
 
 def launch_gui() -> None:
-    VelOpsApp().run()
+    VelOpsApp().run(sys.argv)
 
 
 if __name__ == "__main__":
