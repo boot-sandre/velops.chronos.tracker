@@ -16,6 +16,8 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+import time
+from datetime import datetime
 import importlib.resources
 from velops.chronos.db import DatabaseManager
 from velops.chronos.session import SessionTracker
@@ -207,6 +209,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         # UI state management
         self._tick_src: int | None = None
+        self._is_minimal_mode: bool = False
 
         # Build
         self._load_css()
@@ -229,26 +232,34 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_child(root)
 
         # header bar
-        hb = Gtk.HeaderBar()
-        hb.set_show_title_buttons(True)
+        self._hb = Gtk.HeaderBar()
+        self._hb.set_show_title_buttons(True)
         ttl = Gtk.Label()
         ttl.set_markup("<b>🦁  VelOps — Time Tracker</b>")
-        hb.set_title_widget(ttl)
-        self.set_titlebar(hb)
+        self._hb.set_title_widget(ttl)
+        self.set_titlebar(self._hb)
 
-        root.append(self._mk_toolbar())
-        root.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        self._toolbar = self._mk_toolbar()
+        root.append(self._toolbar)
 
-        sw = Gtk.ScrolledWindow()
-        sw.set_vexpand(True)
-        sw.set_min_content_height(230)
-        sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        sw.set_child(self._mk_tree())
-        root.append(sw)
+        self._sep1 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        root.append(self._sep1)
 
-        root.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-        root.append(self._mk_chrono())
-        root.append(self._mk_statusbar())
+        self._tree_sw = Gtk.ScrolledWindow()
+        self._tree_sw.set_vexpand(True)
+        self._tree_sw.set_min_content_height(230)
+        self._tree_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self._tree_sw.set_child(self._mk_tree())
+        root.append(self._tree_sw)
+
+        self._sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        root.append(self._sep2)
+
+        self._chrono_panel = self._mk_chrono()
+        root.append(self._chrono_panel)
+
+        self._statusbar = self._mk_statusbar()
+        root.append(self._statusbar)
 
     def _mk_toolbar(self) -> Gtk.Box:
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -347,8 +358,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self._btn_stop.set_sensitive(False)
         self._btn_stop.connect("clicked", self._on_stop_record)
 
+        self._btn_mode = Gtk.Button(label="🔽  Minimal")
+        self._btn_mode.connect("clicked", self._on_toggle_mode)
+
         btn_row.append(self._btn_start)
         btn_row.append(self._btn_stop)
+        btn_row.append(self._btn_mode)
         panel.append(btn_row)
         return panel
 
@@ -518,6 +533,23 @@ class MainWindow(Gtk.ApplicationWindow):
             )
             self._refresh_tree()
         dlg.destroy()
+
+    def _on_toggle_mode(self, _btn) -> None:
+        self._is_minimal_mode = not self._is_minimal_mode
+        show_standard = not self._is_minimal_mode
+
+        # Toggle visibility of main widgets
+        self._hb.set_visible(show_standard)
+        self._toolbar.set_visible(show_standard)
+        self._sep1.set_visible(show_standard)
+        self._tree_sw.set_visible(show_standard)
+        self._sep2.set_visible(show_standard)
+        self._statusbar.set_visible(show_standard)
+
+        if self._is_minimal_mode:
+            self._btn_mode.set_label("🔼  Standard")
+        else:
+            self._btn_mode.set_label("🔽  Minimal")
 
     @staticmethod
     def _fmt(secs: int) -> str:
