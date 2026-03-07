@@ -7,17 +7,17 @@ import uuid
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk
+from gi.repository import Gtk   # noqa
 
-from velops.chronos import ui
-from velops.chronos.db import DatabaseManager
+from velops.chronos import ui   # noqa
+from velops.chronos.db import DatabaseManager   # noqa
 
 
 class TestFieldDialog(unittest.TestCase):
     def test_dialog_values(self):
         """Test that FieldDialog collects values from entries correctly."""
         # Use a unique ID to prevent DBus name collision
-        app_id = f"eu.velops.chronos.tests.field.dialog"
+        app_id = "eu.velops.chronos.tests.field.dialog"
         app = Gtk.Application(application_id=app_id)
         app.register(None)
         parent = Gtk.Window(application=app)
@@ -63,7 +63,7 @@ class TestTimesheetDialog(unittest.TestCase):
         ]
         mock_db.get_sessions.return_value = mock_sessions
 
-        app_id = f"eu.velops.chronos.tests.timesheet"
+        app_id = "eu.velops.chronos.tests.timesheet"
         app = Gtk.Application(application_id=app_id)
         app.register(None)
         parent = Gtk.Window(application=app)
