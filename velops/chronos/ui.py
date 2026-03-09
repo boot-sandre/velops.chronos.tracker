@@ -16,176 +16,15 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-import time
-from datetime import datetime
 import importlib.resources
 from velops.chronos.db import DatabaseManager
 from velops.chronos.session import SessionTracker
+from velops.chronos.dialog import ConfirmDialog, FieldDialog, TimesheetDialog
 
 import gi
 
 gi.require_version("Gtk", "4.0")  # noqa
 from gi.repository import Gtk, GLib, Gdk, Pango  # noqa
-
-
-class FieldDialog(Gtk.Dialog):
-    """Generic form dialog — one Gtk.Entry per field tuple (label, key, hint)."""
-
-    def __init__(
-        self, parent: Gtk.Window, title: str, fields: list[tuple[str, str, str]]
-    ):
-        super().__init__(
-            title=title, transient_for=parent, modal=True, use_header_bar=1
-        )
-        self.set_default_size(380, -1)
-        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        ok = self.add_button("  OK  ", Gtk.ResponseType.OK)
-        ok.add_css_class("suggested-action")
-        self.set_default_response(Gtk.ResponseType.OK)
-
-        body = self.get_content_area()
-        body.set_spacing(5)
-        body.set_margin_top(14)
-        body.set_margin_bottom(14)
-        body.set_margin_start(18)
-        body.set_margin_end(18)
-
-        self._entries: dict[str, Gtk.Entry] = {}
-        for lbl_text, key, hint in fields:
-            lbl = Gtk.Label(label=lbl_text)
-            lbl.set_xalign(0)
-            lbl.add_css_class("dim-label")
-            entry = Gtk.Entry()
-            entry.set_placeholder_text(hint)
-            entry.set_activates_default(True)
-            body.append(lbl)
-            body.append(entry)
-            self._entries[key] = entry
-
-    def values(self) -> dict[str, str]:
-        return {k: e.get_text().strip() for k, e in self._entries.items()}
-
-
-class TimesheetDialog(Gtk.Dialog):
-    """
-    Read-only timesheet viewer for a selected project or task.
-    Columns: #  · Type · Start · End · Duration
-    """
-
-    def __init__(
-        self,
-        parent: Gtk.Window,
-        db: DatabaseManager,
-        label: str,
-        project_id: int | None,
-        task_id: int | None,
-    ):
-        super().__init__(
-            title=f"Timesheet — {label}",
-            transient_for=parent,
-            modal=True,
-            use_header_bar=1,
-        )
-        self.set_default_size(720, 400)
-        close = self.add_button("Close", Gtk.ResponseType.CLOSE)
-        close.add_css_class("suggested-action")
-        self.connect("response", lambda d, _: d.destroy())
-
-        # ── ListStore: id · type · start · end · duration ─────────────────
-        store = Gtk.ListStore(int, str, str, str, str)
-        rows = db.get_sessions(project_id=project_id, task_id=task_id)
-        for r in rows:
-            h, rem = divmod(r["duration_seconds"], 3600)
-            m, s = divmod(rem, 60)
-            store.append(
-                [
-                    r["id"],
-                    "⚙ work" if r["entry_type"] == "work" else "☕ free",
-                    (r["start_time"] or "")[:19],
-                    (r["end_time"] or "")[:19],
-                    f"{h:02d}:{m:02d}:{s:02d}",
-                ]
-            )
-
-        tv = Gtk.TreeView(model=store)
-        tv.set_headers_visible(True)
-        tv.set_enable_tree_lines(False)
-
-        def _col(title, idx, min_w, expand=False):
-            r = Gtk.CellRendererText()
-            r.set_property("ellipsize", Pango.EllipsizeMode.END)
-            c = Gtk.TreeViewColumn(title, r, text=idx)
-            c.set_min_width(min_w)
-            c.set_expand(expand)
-            c.set_resizable(True)
-            tv.append_column(c)
-
-        _col("#", 0, 50)
-        _col("Type", 1, 90)
-        _col("Start", 2, 160, expand=True)
-        _col("End", 3, 160, expand=True)
-        _col("Duration", 4, 90)
-
-        sw = Gtk.ScrolledWindow()
-        sw.set_vexpand(True)
-        sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        sw.set_child(tv)
-
-        # ── summary footer ─────────────────────────────────────────────────
-        total_w = sum(r["duration_seconds"] for r in rows if r["entry_type"] == "work")
-        total_f = sum(
-            r["duration_seconds"] for r in rows if r["entry_type"] == "freetime"
-        )
-
-        def _fmt(s):
-            h, r = divmod(s, 3600)
-            m, sc = divmod(r, 60)
-            return f"{h:02d}:{m:02d}:{sc:02d}"
-
-        summary = Gtk.Label()
-        summary.set_markup(
-            f"<b>{len(rows)}</b> sessions  ·  "
-            f"⚙ work <b>{_fmt(total_w)}</b>  ·  "
-            f"☕ free <b>{_fmt(total_f)}</b>"
-        )
-        summary.add_css_class("dim-label")
-        summary.set_margin_top(8)
-        summary.set_margin_bottom(8)
-
-        body = self.get_content_area()
-        body.set_spacing(0)
-        body.append(sw)
-        body.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-        body.append(summary)
-
-
-class ConfirmDialog(Gtk.Dialog):
-    """Minimal yes/no confirmation dialog."""
-
-    def __init__(self, parent: Gtk.Window, heading: str, detail: str):
-        super().__init__(
-            title="Confirm", transient_for=parent, modal=True, use_header_bar=0
-        )
-        self.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        d = self.add_button("Delete", Gtk.ResponseType.OK)
-        d.add_css_class("destructive-action")
-        self.set_default_response(Gtk.ResponseType.CANCEL)
-
-        area = self.get_content_area()
-        area.set_spacing(6)
-        area.set_margin_top(16)
-        area.set_margin_bottom(16)
-        area.set_margin_start(18)
-        area.set_margin_end(18)
-
-        h = Gtk.Label()
-        h.set_markup(f"<b>{heading}</b>")
-        h.set_xalign(0)
-        b = Gtk.Label(label=detail)
-        b.set_xalign(0)
-        b.add_css_class("dim-label")
-        area.append(h)
-        area.append(b)
 
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -228,8 +67,8 @@ class MainWindow(Gtk.ApplicationWindow):
         )
 
     def _build_ui(self) -> None:
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.set_child(root)
+        self._root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.set_child(self._root_box)
 
         # header bar
         self._hb = Gtk.HeaderBar()
@@ -240,26 +79,26 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_titlebar(self._hb)
 
         self._toolbar = self._mk_toolbar()
-        root.append(self._toolbar)
+        self._root_box.append(self._toolbar)
 
         self._sep1 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        root.append(self._sep1)
+        self._root_box.append(self._sep1)
 
         self._tree_sw = Gtk.ScrolledWindow()
         self._tree_sw.set_vexpand(True)
-        self._tree_sw.set_min_content_height(230)
+        # self._tree_sw.set_min_content_height(230)
         self._tree_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         self._tree_sw.set_child(self._mk_tree())
-        root.append(self._tree_sw)
+        # self._root_box.append(self._tree_sw)
 
         self._sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        root.append(self._sep2)
+        self._root_box.append(self._sep2)
 
         self._chrono_panel = self._mk_chrono()
-        root.append(self._chrono_panel)
+        self._root_box.append(self._chrono_panel)
 
         self._statusbar = self._mk_statusbar()
-        root.append(self._statusbar)
+        self._root_box.append(self._statusbar)
 
     def _mk_toolbar(self) -> Gtk.Box:
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -283,6 +122,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self._btn_ts.set_sensitive(False)
         self._btn_ts.connect("clicked", self._on_show_timesheet)
 
+        self._btn_mode = Gtk.Button(label="🔽  Minimal")
+        self._btn_mode.set_sensitive(False)
+        self._btn_mode.connect("clicked", self._on_toggle_mode)
+
         self._sel_info = Gtk.Label(label="Nothing selected")
         self._sel_info.set_hexpand(True)
         self._sel_info.set_xalign(1.0)
@@ -293,6 +136,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._btn_add_task,
             self._btn_del,
             self._btn_ts,
+            self._btn_mode,
             self._sel_info,
         ):
             bar.append(w)
@@ -358,12 +202,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._btn_stop.set_sensitive(False)
         self._btn_stop.connect("clicked", self._on_stop_record)
 
-        self._btn_mode = Gtk.Button(label="🔽  Minimal")
-        self._btn_mode.connect("clicked", self._on_toggle_mode)
-
         btn_row.append(self._btn_start)
         btn_row.append(self._btn_stop)
-        btn_row.append(self._btn_mode)
         panel.append(btn_row)
         return panel
 
@@ -536,20 +376,43 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_toggle_mode(self, _btn) -> None:
         self._is_minimal_mode = not self._is_minimal_mode
-        show_standard = not self._is_minimal_mode
-
-        # Toggle visibility of main widgets
-        self._hb.set_visible(show_standard)
-        self._toolbar.set_visible(show_standard)
-        self._sep1.set_visible(show_standard)
-        self._tree_sw.set_visible(show_standard)
-        self._sep2.set_visible(show_standard)
-        self._statusbar.set_visible(show_standard)
 
         if self._is_minimal_mode:
             self._btn_mode.set_label("🔼  Standard")
+            # Save the window size right before we shrink it
+            self._saved_width = self.get_width()
+            self._saved_height = self.get_height()
+            
+            self._hb.set_visible(False)
+            
+            # Completely remove elements from the layout tree
+            self._root_box.remove(self._toolbar)
+            self._root_box.remove(self._sep1)
+            self._root_box.remove(self._tree_sw)
+            self._root_box.remove(self._sep2)
+            self._root_box.remove(self._statusbar)
+
+            # We DO NOT use self.set_resizable(False) anymore.
+            # Leaving it resizable allows the user to manually shrink the window 
+            # to fit the remaining content perfectly.
+            self.set_default_size(self._saved_width, 1)
         else:
             self._btn_mode.set_label("🔽  Minimal")
+            
+            self._hb.set_visible(True)
+
+            # Restore elements into the layout in the correct sequence
+            self._root_box.insert_child_after(self._toolbar, None)          # First item
+            self._root_box.insert_child_after(self._sep1, self._toolbar)    # After toolbar
+            self._root_box.insert_child_after(self._tree_sw, self._sep1)    # After sep1
+            self._root_box.insert_child_after(self._sep2, self._tree_sw)    # After tree
+            # (self._chrono_panel remains securely in the layout)
+            self._root_box.insert_child_after(self._statusbar, self._chrono_panel) # After chrono
+
+            # Restore the previous dimensions
+            w = getattr(self, "_saved_width", 860)
+            h = getattr(self, "_saved_height", 740)
+            self.set_default_size(w, h)
 
     @staticmethod
     def _fmt(secs: int) -> str:
